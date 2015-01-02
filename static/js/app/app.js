@@ -233,6 +233,28 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         }
     };
 
+    var saveMapPosition = function () {
+        if (typeof localStorage !== 'undefined') {
+            localStorage['mapZoom'] = map.getZoom();
+            localStorage['mapCenter'] = JSON.stringify(map.getCenter());
+        }
+    }
+
+    var restoreMapPosition = function () {
+        try {
+            if (typeof localStorage !== 'undefined') {
+                if (localStorage['mapZoom']) {
+                    map.setZoom(localStorage['mapZoom']);
+                }
+                if (localStorage['mapCenter']) {
+                    map.panTo(JSON.parse(localStorage['mapCenter']));
+                }
+            }
+        } catch (e) {
+            console.log("Couldn't restore map position: " + e);
+        }
+    }
+
     var renderFeatures = function () {
         for (var i in features) {
             var feature = features[i];
@@ -258,10 +280,18 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
             });
         });
 
+        map.on('moveend', function () {
+            saveMapPosition();
+        })
+
         map.on('viewreset', function () {
             console.log(map.getZoom());
+            saveMapPosition();
+            init();
             renderFeatures();
         });
+
+        restoreMapPosition();
 
     }).then(function () {
         $.ajax("/api/routes?asGeoJson=true").done(function (data) {
