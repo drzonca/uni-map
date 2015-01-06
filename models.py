@@ -12,6 +12,31 @@ app.config.from_pyfile('config.py')
 db = SQLAlchemy(app)
 
 
+class Service(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    monday = db.Column(db.Boolean)
+    tuesday = db.Column(db.Boolean)
+    wednesday = db.Column(db.Boolean)
+    thursday = db.Column(db.Boolean)
+    friday = db.Column(db.Boolean)
+    saturday = db.Column(db.Boolean)
+    sunday = db.Column(db.Boolean)
+
+    def __init__(self, id, monday, tuesday, wednesday, thursday, friday, saturday, sunday):
+        self.id = id
+        self.monday = monday
+        self.tuesday = tuesday
+        self.wednesday = wednesday
+        self.thursday = thursday
+        self.friday = friday
+        self.saturday = saturday
+        self.sunday = sunday
+
+    def __repr__(self):
+        return '<Service %d%d%d%d%d%d%d>' % (
+            self.monday, self.tuesday, self.wednesday, self.thursday, self.friday, self.saturday, self.sunday)
+
+
 class Route(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     agency_id = db.Column(db.Integer)
@@ -48,5 +73,56 @@ class Route(db.Model):
         coordinates = feature['coordinates']
         if len(coordinates) > 1:
             feature['coordinates'] = [coordinates[0]]
+        feature['properties'] = self.to_dict()
+        return feature
+
+
+class StopTime(db.Model):
+    __tablename__ = 'stop_time'
+    id = db.Column(db.Integer, primary_key=True)
+    trip_id = db.Column(db.Integer, db.ForeignKey('trip.id'))
+    trip = db.relationship('Trip', backref='stop_times')
+    stop_id = db.Column(db.Integer)
+    arrival_time = db.Column(db.Integer)
+    departure_time = db.Column(db.Integer)
+    stop_sequence = db.Column(db.Integer)
+
+    def __init__(self, id, trip_id, stop_id, arrival_time, departure_time, stop_sequence):
+        self.id = id
+        self.trip_id = trip_id
+        self.arrival_time = arrival_time
+        self.departure_time = departure_time
+        self.stop_sequence = stop_sequence
+
+
+class Trip(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    route_id = db.Column(db.Integer, db.ForeignKey('route.id'))
+    route = db.relationship('Route')
+    service_id = db.Column(db.Integer, db.ForeignKey('service.id'))
+    headsign = db.Column(db.String(256))
+    geometry = db.Column(Geometry('LINE'))
+
+    def __init__(self, id, route_id, service_id, headsign, geometry):
+        self.id = id
+        self.route_id = route_id
+        self.service_id = service_id
+        self.headsign = headsign
+        self.geometry = geometry
+
+    def __repr__(self):
+        return '<Trip %r>' % self.headsign
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'route_id': self.route_id,
+            'service_id': self.service_id,
+            'headsign': self.headsign,
+            'route': self.route.to_dict()
+        }
+
+    def to_geo_json_dict(self):
+        feature = json.loads(db.session.scalar(geofunc.ST_AsGeoJSON(self.geometry)))
         feature['properties'] = self.to_dict()
         return feature

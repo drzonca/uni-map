@@ -6,6 +6,7 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
     var baseOffsetPx = 2;
 
     var totalWeightByPoint;
+    var routeOffsetByPoint;
 
     var agencyOffset;
     var lastAgencyOffset;
@@ -17,6 +18,7 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
 
     var init = function () {
         totalWeightByPoint = {};
+        routeOffsetByPoint = {};
         agencyOffset = 0;
         lines = [];
         agencyOffsetMemo = {};
@@ -111,12 +113,21 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
     };
 
     /**
-     * Applies a given offset to a given point
+     * Applies a given offset to a given point.
+     *
+     * For metro lines only, attempt to offset perpendicular
+     * to the direction of the already existing line. Since bus lines
+     * often have irregular shapes, this method won't work reliably.
      *
      * @returns {*}     the point, with offset applied
      */
     var applyOffset = function (point, myOffset, ref1, ref2) {
-        if (properties['rtype'] == 1) {
+        /* Sort the points, since lines may alternate directions */
+        var diff = (ref2[1] - ref1[1]) - (ref2[0] + ref1[0]);
+        if (diff > 0) {
+            var tmp = ref2, ref2 = ref1, ref1 = tmp;
+        }
+        if (properties['route']['rtype'] == 1) {
             /* Space perpendicular for metro lines */
             var delta = [
                 ref2[0] - ref1[0],
@@ -162,6 +173,8 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
      * @returns         the point with the offset applied
      */
     var offsetOverlap = function (point, i, points) {
+        var routeId = properties['route']['id'];
+        var key = hash(point);
         var ref1, ref2;
         if (points[i + 1]) {
             ref1 = point, ref2 = points[i + 1];
@@ -170,13 +183,22 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         }
         var myOffset = (agencyOffset >= 0) ? getOffset() : -getOffset();
         var corrected = applyOffset(point, agencyOffset, ref1, ref2);
-        var weightAtPoint = overlapsExisting(point);
-        if (weightAtPoint) {
-            var totalOffset = myOffset >= 0 ? myOffset + pxToCoord(weightAtPoint) : myOffset - pxToCoord(weightAtPoint);
-            corrected = applyOffset(corrected, totalOffset, ref1, ref2);
-            totalWeightByPoint[hash(point)] += opts.weight;
-        } else {
-            totalWeightByPoint[hash(point)] = opts.weight;
+        if (!routeOffsetByPoint[key]) {
+            routeOffsetByPoint[key] = {};
+        }
+        if (routeOffsetByPoint[key][routeId]) {
+            corrected = applyOffset(corrected, routeOffsetByPoint[key][routeId]);
+        } else if (properties['route']['rtype'] == 1) {
+            var weightAtPoint = overlapsExisting(point);
+            if (weightAtPoint) {
+                var totalOffset = myOffset >= 0 ? myOffset + pxToCoord(weightAtPoint) : myOffset - pxToCoord(weightAtPoint);
+                routeOffsetByPoint[key][routeId] = totalOffset;
+                corrected = applyOffset(corrected, totalOffset, ref1, ref2);
+                totalWeightByPoint[key] += opts.weight;
+            } else {
+                routeOffsetByPoint[key][routeId] = 0;
+                totalWeightByPoint[key] = opts.weight;
+            }
         }
         return corrected;
     };
@@ -189,37 +211,29 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
      */
     var featureToPolyline = function (feature) {
         properties = feature['properties'];
-        agencyOffset = getAgencyOffset(properties['agency_id']);
+        var route = properties['route'];
+        agencyOffset = getAgencyOffset(route['agency_id']);
 
         if (feature['coordinates'] && feature['coordinates'][0]) {
             try {
                 opts = {
-                    opacity: 1,
-                    weight: 2
+                    opacity: .67,
+                    weight: properties['count']
                 };
-                if ($.trim(properties['color'])) {
-                    opts.color = '#' + properties['color'];
+                if ($.trim(route['color'])) {
+                    opts.color = '#' + route['color'];
                 }
                 /* Override color and weight for different types of routes */
-                if (properties['rtype'] == 0) {
-                    /* Light rail lines */
-                    opts.weight = 4;
-                } else if (properties['rtype'] == 1) {
-                    /* Metro lines */
-                    opts.weight = 6;
-                } else if (properties['long_name'].match(/limited/i)) {
-                    opts.weight = 4;
+                if (route['long_name'].match(/limited/i)) {
                     opts.color = opts.color || 'green';
-                } else if (properties['long_name'].match(/express/i)) {
+                } else if (route['long_name'].match(/express/i)) {
                     opts.color = opts.color || 'red';
-                    opts.weight = 1;
-                } else if (properties['long_name'].match(/owl/i)) {
+                } else if (route['long_name'].match(/owl/i)) {
                     opts.color = opts.color || 'blue';
-                    opts.weight = 1;
                 }
                 opts.color = opts.color || defaultColor;
                 opts.weight *= featureWeightCorrection();
-                var latLongs = feature['coordinates'][0].map(function (longLat) {
+                var latLongs = feature['coordinates'].map(function (longLat) {
                     /*
                      * The server data has [long, lat], but we need [lat, long]
                      * Copy the array first so we don't reverse the original.
@@ -294,16 +308,17 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         restoreMapPosition();
 
     }).then(function () {
-        $.ajax("/api/routes?asGeoJson=true").done(function (data) {
+        $.ajax("/api/trips/frequency/8?asGeoJson=true").done(function (data) {
             init();
             features = data.result['features'].sort(function (a, b) {
                 var propA = a['properties'], propB = b['properties'];
-                if (propA['short_name'] < propB['short_name']) {
+                var routeA = propA['route'], routeB = propB['route'];
+                if (routeA['short_name'] < routeB['short_name']) {
                     return -1
-                } else if (propA['short_name'] > propB['short_name']) {
+                } else if (routeA['short_name'] > routeB['short_name']) {
                     return 1;
                 } else {
-                    return propA['long_name'] < propB['long_name'] ? -1 : 1;
+                    return routeA['long_name'] < routeB['long_name'] ? -1 : 1;
                 }
             });
             renderFeatures();

@@ -1,5 +1,6 @@
-from models import app, Route
-from flask import Flask, render_template, jsonify, request
+from models import app, db, Route, Trip, StopTime, Service
+from flask import render_template, jsonify, request
+from sqlalchemy import between, select, func
 
 
 def to_dict_list(data):
@@ -36,6 +37,55 @@ def routes():
             return jsonify(result=to_dict_list(result))
     else:
         return jsonify(error="No routes found."), 500
+
+
+geo_by_start = {}
+
+
+@app.route('/api/trips/frequency/<int:start_time>')
+def trips_at(start_time):
+    start_time *= 3600
+    if start_time in geo_by_start:
+        return geo_by_start[start_time]
+    end_time = start_time + 3600
+    service_today = select([Service.id]).where(Service.monday)
+    first_stop_at_start_time = select([StopTime.trip_id]).having(
+        between(func.min(StopTime.departure_time), start_time, end_time)).group_by(StopTime.trip_id)
+    result = Trip.query.filter(Trip.id.in_(first_stop_at_start_time)).filter(Trip.service_id.in_(service_today)).all()
+    if result:
+        by_route = {}
+        for trip in result:
+            if not trip.route_id in by_route:
+                by_route[trip.route_id] = {}
+            by_headsign = by_route[trip.route_id]
+            if not trip.headsign in by_headsign:
+                by_headsign[trip.headsign] = []
+            by_headsign[trip.headsign].append(trip)
+        if request.args.get('asGeoJson'):
+            collection = {'type': 'FeatureCollection',
+                          'features': []}
+            for route_id in by_route:
+                by_headsign = by_route[route_id]
+                for headsign in by_headsign:
+                    trips = by_headsign[headsign]
+                    trip = trips[0].to_geo_json_dict()
+                    trip['properties']['count'] = len(trips)
+                    collection['features'].append(trip)
+            geo_by_start[start_time] = jsonify(result=collection)
+            return geo_by_start[start_time]
+        else:
+            return jsonify(result=to_dict_list(result))
+    else:
+        return jsonify(error="No trips found."), 500
+
+
+@app.route('/api/trips/')
+def trips():
+    result = Trip.query.all()
+    if result:
+        return jsonify(result=to_dict_list(result))
+    else:
+        return jsonify(error="No trips found."), 500
 
 
 if __name__ == '__main__':
