@@ -11,16 +11,23 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
     var agencyOffset;
     var lastAgencyOffset;
     var agencyOffsetMemo;
-    var features;
+    var tripFeatures;
+    var stopFeatures;
     var lines;
+    var points;
     var opts;
     var properties;
+    var routeIdsByStop;
+    var routesById;
 
     var init = function () {
         totalWeightByPoint = {};
         routeOffsetByPoint = {};
+        routeIdsByStop = {};
+        routesById = {};
         agencyOffset = 0;
         lines = [];
+        points = [];
         agencyOffsetMemo = {};
         lastAgencyOffset = undefined;
     };
@@ -125,7 +132,9 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         /* Sort the points, since lines may alternate directions */
         var diff = (ref2[1] - ref1[1]) - (ref2[0] + ref1[0]);
         if (diff > 0) {
-            var tmp = ref2, ref2 = ref1, ref1 = tmp;
+            var tmp = ref2;
+            ref2 = ref1;
+            ref1 = tmp;
         }
         if (properties['route']['rtype'] == 1) {
             /* Space perpendicular for metro lines */
@@ -177,9 +186,11 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         var key = hash(point);
         var ref1, ref2;
         if (points[i + 1]) {
-            ref1 = point, ref2 = points[i + 1];
+            ref1 = point;
+            ref2 = points[i + 1];
         } else {
-            ref1 = points[i - 1], ref2 = point;
+            ref1 = points[i - 1];
+            ref2 = point;
         }
         var myOffset = (agencyOffset >= 0) ? getOffset() : -getOffset();
         var corrected = applyOffset(point, agencyOffset, ref1, ref2);
@@ -247,12 +258,44 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         }
     };
 
+    var featureToPoint = function (feature) {
+        properties = feature['properties'];
+        var label = "";
+        var stopId = properties['id'];
+        var routeCount = 0;
+        var className = 'stop-icon';
+        if (map.getZoom() < 15) {
+            className += ' small';
+        }
+        if (routeIdsByStop[stopId]) {
+            if (map.getZoom() >= 15) {
+                for (var routeId in routeIdsByStop[stopId]) {
+                    var shortName = routesById[routeId]['short_name'];
+                    label += $.trim(shortName) + " ";
+                    routeCount++;
+                }
+            }
+            return L.marker([feature['coordinates'][1], feature['coordinates'][0]], {
+                icon: L.divIcon(
+                    {
+                        // Specify a class name we can refer to in CSS.
+                        className: className,
+                        // Define what HTML goes in each marker.
+                        html: '<span title="' + properties['name'] + '">' + $.trim(label) + '</span>',
+                        // Set a markers width and height.
+                        iconSize: ['auto', 16]
+                    }
+                )
+            });
+        }
+    };
+
     var saveMapPosition = function () {
         if (typeof localStorage !== 'undefined') {
             localStorage['mapZoom'] = map.getZoom();
             localStorage['mapCenter'] = JSON.stringify(map.getCenter());
         }
-    }
+    };
 
     var restoreMapPosition = function () {
         try {
@@ -267,18 +310,38 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         } catch (e) {
             console.log("Couldn't restore map position: " + e);
         }
-    }
+    };
 
     var renderFeatures = function () {
-        for (var i in features) {
-            var feature = features[i];
+        for (var i in tripFeatures) {
+            var feature = tripFeatures[i];
+            var routeId = feature['properties']['route_id'];
+            var stops = feature['properties']['stop_ids'];
+            routesById[routeId] = feature['properties']['route'];
+            for (var i in stops) {
+                var stop = stops[i];
+                if (!routeIdsByStop[stop]) {
+                    routeIdsByStop[stop] = {};
+                }
+                routeIdsByStop[stop][routeId] = true;
+            }
             var polyline = featureToPolyline(feature);
             if (polyline) {
                 polyline.addTo(map);
                 lines.push(polyline);
             }
         }
-    }
+        if (map.getZoom() > 12) {
+            for (var i in stopFeatures) {
+                var feature = stopFeatures[i];
+                var marker = featureToPoint(feature);
+                if (marker) {
+                    marker.addTo(map);
+                    points.push(marker);
+                }
+            }
+        }
+    };
 
     init();
 
@@ -292,11 +355,14 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
             lines.forEach(function (line) {
                 map.removeLayer(line);
             });
+            points.forEach(function (point) {
+                map.removeLayer(point);
+            });
         });
 
         map.on('moveend', function () {
             saveMapPosition();
-        })
+        });
 
         map.on('viewreset', function () {
             console.log(map.getZoom());
@@ -308,20 +374,26 @@ require(['jquery', 'mapbox', 'domReady!'], function ($) {
         restoreMapPosition();
 
     }).then(function () {
-        $.ajax("/api/trips/frequency/8?asGeoJson=true").done(function (data) {
-            init();
-            features = data.result['features'].sort(function (a, b) {
-                var propA = a['properties'], propB = b['properties'];
-                var routeA = propA['route'], routeB = propB['route'];
-                if (routeA['short_name'] < routeB['short_name']) {
-                    return -1
-                } else if (routeA['short_name'] > routeB['short_name']) {
-                    return 1;
-                } else {
-                    return routeA['long_name'] < routeB['long_name'] ? -1 : 1;
-                }
+        $.ajax("/api/stops").done(function (data) {
+            stopFeatures = data.result['features'];
+
+        }).then(function () {
+            $.ajax("/api/trips/frequency/14?asGeoJson=true").done(function (data) {
+                init();
+                tripFeatures = data.result['features'].sort(function (a, b) {
+                    var propA = a['properties'], propB = b['properties'];
+                    var routeA = propA['route'], routeB = propB['route'];
+                    if (routeA['short_name'] < routeB['short_name']) {
+                        return -1
+                    } else if (routeA['short_name'] > routeB['short_name']) {
+                        return 1;
+                    } else {
+                        return routeA['long_name'] < routeB['long_name'] ? -1 : 1;
+                    }
+                });
+                renderFeatures();
             });
-            renderFeatures();
         });
-    })
-});
+    });
+})
+;

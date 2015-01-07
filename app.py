@@ -1,6 +1,8 @@
-from models import app, db, Route, Trip, StopTime, Service
+from models import app, db, Route, Trip, Stop, StopTime, Service
 from flask import render_template, jsonify, request
 from sqlalchemy import between, select, func
+
+SECONDS_PER_HOUR = 3600
 
 
 def to_dict_list(data):
@@ -42,16 +44,32 @@ def routes():
 geo_by_start = {}
 
 
+def service_today():
+    return select([Service.id]).where(Service.monday)
+
+
+def first_stop_at_start_time(start_time, end_time):
+    return select([StopTime.trip_id]).having(
+        between(func.min(StopTime.departure_time), start_time, end_time)).group_by(StopTime.trip_id)
+
+
+@app.route('/api/stops')
+def stops():
+    result = Stop.query.all()
+    if (result):
+        return jsonify(result=to_geo_json_feature_collection(result))
+    else:
+        return jsonify(result="No stop times found"), 500
+
+
 @app.route('/api/trips/frequency/<int:start_time>')
 def trips_at(start_time):
-    start_time *= 3600
+    start_time *= SECONDS_PER_HOUR
     if start_time in geo_by_start:
         return geo_by_start[start_time]
-    end_time = start_time + 3600
-    service_today = select([Service.id]).where(Service.monday)
-    first_stop_at_start_time = select([StopTime.trip_id]).having(
-        between(func.min(StopTime.departure_time), start_time, end_time)).group_by(StopTime.trip_id)
-    result = Trip.query.filter(Trip.id.in_(first_stop_at_start_time)).filter(Trip.service_id.in_(service_today)).all()
+    end_time = start_time + SECONDS_PER_HOUR
+    result = Trip.query.filter(Trip.id.in_(first_stop_at_start_time(start_time, end_time))).filter(
+        Trip.service_id.in_(service_today())).all()
     if result:
         by_route = {}
         for trip in result:

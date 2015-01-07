@@ -6,3 +6,27 @@ body {
     width: 100%;
     height: 100%;
 }
+
+.stop-icon {
+    background-color: white;
+    border-radius: 8px;
+    border: 2px solid black;
+    font-size: 8px;
+    text-align: center;
+    line-height: 12px;
+    padding-left: 3px;
+    padding-right: 3px;
+    min-width: 16px;
+    white-space: nowrap;
+}
+
+.stop-icon.small {
+    border-width: 1px;
+    overflow: hidden;
+    min-width: 0;
+    max-width: 4px;
+    max-height: 4px;
+    width: 4px;
+    height: 4px;
+    padding: 0;
+}

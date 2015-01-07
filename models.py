@@ -77,12 +77,35 @@ class Route(db.Model):
         return feature
 
 
+class Stop(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String)
+    point = db.Column(Geometry('POINT'))
+
+    def __init__(self, id, name, point):
+        self.id = id
+        self.name = name
+        self.point = point
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name
+        }
+
+    def to_geo_json_dict(self):
+        feature = json.loads(db.session.scalar(geofunc.ST_AsGeoJSON(self.point)))
+        feature['properties'] = self.to_dict()
+        return feature
+
+
 class StopTime(db.Model):
     __tablename__ = 'stop_time'
     id = db.Column(db.Integer, primary_key=True)
     trip_id = db.Column(db.Integer, db.ForeignKey('trip.id'))
     trip = db.relationship('Trip', backref='stop_times')
-    stop_id = db.Column(db.Integer)
+    stop_id = db.Column(db.Integer, db.ForeignKey('stop.id'))
+    stop = db.relationship('Stop', backref='stop_times')
     arrival_time = db.Column(db.Integer)
     departure_time = db.Column(db.Integer)
     stop_sequence = db.Column(db.Integer)
@@ -90,9 +113,20 @@ class StopTime(db.Model):
     def __init__(self, id, trip_id, stop_id, arrival_time, departure_time, stop_sequence):
         self.id = id
         self.trip_id = trip_id
+        self.stop_id = stop_id
         self.arrival_time = arrival_time
         self.departure_time = departure_time
         self.stop_sequence = stop_sequence
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'trip_id': self.trip_id,
+            'stop_id': self.stop_id,
+            'arrival_time': self.arrival_time,
+            'departure_time': self.departure_time,
+            'stop_sequence': self.stop_sequence,
+        }
 
 
 class Trip(db.Model):
@@ -119,7 +153,8 @@ class Trip(db.Model):
             'route_id': self.route_id,
             'service_id': self.service_id,
             'headsign': self.headsign,
-            'route': self.route.to_dict()
+            'route': self.route.to_dict(),
+            'stop_ids': [st.stop_id for st in self.stop_times]
         }
 
     def to_geo_json_dict(self):
