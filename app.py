@@ -4,6 +4,9 @@ from sqlalchemy import between, select, func
 
 SECONDS_PER_HOUR = 3600
 
+stops_cache = None
+geo_by_start = {}
+
 
 def to_dict_list(data):
     return [e.to_dict() for e in data]
@@ -18,14 +21,13 @@ def to_geo_json_feature_collection(features):
 
 @app.route('/')
 def show_map():
-    return render_template('app.html')
+    return render_template('index.html')
 
 
 @app.route('/config/')
 def config():
     return jsonify(config={
-        'mapbox_token': app.config['MAPBOX_ACCESS_TOKEN'],
-        'mapbox_map': app.config['MAPBOX_MAP']
+        'mapbox_token': app.config['MAPBOX_ACCESS_TOKEN']
     })
 
 
@@ -41,25 +43,26 @@ def routes():
         return jsonify(error="No routes found."), 500
 
 
-geo_by_start = {}
-
-
 def service_today():
     return select([Service.id]).where(Service.monday)
 
 
 def first_stop_at_start_time(start_time, end_time):
     return select([StopTime.trip_id]).having(
-        between(func.min(StopTime.departure_time), start_time, end_time)).group_by(StopTime.trip_id)
+        between(func.min(StopTime.departure_time), start_time,
+                end_time)).group_by(StopTime.trip_id)
 
 
 @app.route('/api/stops')
 def stops():
-    result = Stop.query.all()
-    if (result):
-        return jsonify(result=to_geo_json_feature_collection(result))
-    else:
-        return jsonify(result="No stop times found"), 500
+    global stops_cache
+    if not stops_cache:
+        result = Stop.query.all()
+        if result:
+            stops_cache = jsonify(result=to_geo_json_feature_collection(result))
+        else:
+            return jsonify(result="No stop times found"), 500
+    return stops_cache
 
 
 @app.route('/api/trips/frequency/<int:start_time>')
@@ -68,7 +71,8 @@ def trips_at(start_time):
     if start_time in geo_by_start:
         return geo_by_start[start_time]
     end_time = start_time + SECONDS_PER_HOUR
-    result = Trip.query.filter(Trip.id.in_(first_stop_at_start_time(start_time, end_time))).filter(
+    result = Trip.query.filter(
+        Trip.id.in_(first_stop_at_start_time(start_time, end_time))).filter(
         Trip.service_id.in_(service_today())).all()
     if result:
         by_route = {}
